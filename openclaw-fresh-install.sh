@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# OpenClaw — ЧИСТАЯ УСТАНОВКА на VPS (Ubuntu/Debian)
+# OpenClaw — ЧИСТАЯ УСТАНОВКА на OVHcloud VPS (Ubuntu/Debian)
 # Запускать ПОСЛЕ openclaw-full-cleanup.sh
 #
 # Использование:
@@ -24,7 +24,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error() { echo -e "${RED}[ERR]${NC}   $*"; }
 
 echo "============================================"
-echo " OpenClaw — ЧИСТАЯ УСТАНОВКА"
+echo " OpenClaw — ЧИСТАЯ УСТАНОВКА (OVHcloud VPS)"
 echo "============================================"
 echo ""
 
@@ -47,11 +47,19 @@ if command -v docker &>/dev/null; then
         LEFTOVERS=true
     fi
 fi
+# Проверяем порт
+if command -v ss &>/dev/null; then
+    if ss -tlnp 2>/dev/null | grep -q ":18789"; then
+        error "Порт 18789 занят! Возможно OpenClaw ещё работает."
+        LEFTOVERS=true
+    fi
+fi
 
 if [ "$LEFTOVERS" = true ]; then
     echo ""
     error "Обнаружены остатки предыдущей установки."
     error "Запустите: sudo ./openclaw-full-cleanup.sh"
+    error "Затем перезагрузите: sudo reboot"
     exit 1
 fi
 
@@ -60,24 +68,30 @@ echo ""
 
 # ── 1. Обновление системы и установка зависимостей ────────────────────────
 
-info "1/5 — Обновляю систему и устанавливаю зависимости..."
+info "1/6 — Обновляю систему и устанавливаю зависимости..."
 
+export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
 apt-get install -y \
     curl \
+    wget \
     git \
     ca-certificates \
     gnupg \
     lsb-release \
     ufw \
-    fail2ban
+    fail2ban \
+    unattended-upgrades
+
+# Включаем автообновления безопасности
+dpkg-reconfigure -plow unattended-upgrades 2>/dev/null || true
 
 info "  Системные пакеты установлены."
 
 # ── 2. Установка Docker (если не установлен) ──────────────────────────────
 
-info "2/5 — Проверяю Docker..."
+info "2/6 — Проверяю Docker..."
 
 if ! command -v docker &>/dev/null; then
     info "  Docker не найден, устанавливаю..."
@@ -106,57 +120,78 @@ else
     info "  Docker уже установлен: $(docker --version)"
 fi
 
-# Проверяем Docker Compose v2
+# Проверяем Docker Compose v2 (ВАЖНО: v1 = сломанный деплой)
 if ! docker compose version &>/dev/null; then
     error "Docker Compose v2 не установлен! Установите docker-compose-plugin."
+    error "  apt-get install -y docker-compose-plugin"
     exit 1
 fi
 info "  Docker Compose: $(docker compose version)"
 
-# ── 3. Настройка безопасности ─────────────────────────────────────────────
+# Добавляем текущего пользователя в группу docker (если не root)
+ACTUAL_USER="${SUDO_USER:-$USER}"
+if [ "$ACTUAL_USER" != "root" ]; then
+    usermod -aG docker "$ACTUAL_USER" 2>/dev/null || true
+    info "  Пользователь $ACTUAL_USER добавлен в группу docker."
+fi
 
-info "3/5 — Настраиваю firewall..."
+# ── 3. Настройка безопасности (OVHcloud best practices) ───────────────────
 
-ufw allow ssh 2>/dev/null || true
-# НЕ открываем порт 18789 наружу — только через localhost
+info "3/6 — Настраиваю firewall и безопасность..."
+
+ufw allow OpenSSH 2>/dev/null || true
+ufw allow 443/tcp 2>/dev/null || true
+# НЕ открываем порт 18789 наружу — только через SSH-туннель
 ufw --force enable 2>/dev/null || true
 
-info "  UFW настроен (порт OpenClaw НЕ открыт наружу)."
+# Настраиваем fail2ban
+if systemctl is-active --quiet fail2ban 2>/dev/null; then
+    info "  fail2ban уже работает."
+else
+    systemctl enable fail2ban 2>/dev/null || true
+    systemctl start fail2ban 2>/dev/null || true
+    info "  fail2ban запущен."
+fi
 
-# ── 4. Клонирование и установка OpenClaw ──────────────────────────────────
+info "  UFW настроен. Порт 18789 НЕ открыт наружу (доступ через SSH-туннель)."
 
-info "4/5 — Клонирую и устанавливаю OpenClaw..."
+# ── 4. Клонирование OpenClaw ──────────────────────────────────────────────
+
+info "4/6 — Клонирую OpenClaw..."
 
 INSTALL_DIR="$HOME/openclaw"
-mkdir -p "$INSTALL_DIR"
+
+if [ -d "$INSTALL_DIR" ]; then
+    warn "  Директория $INSTALL_DIR уже существует — удаляю..."
+    rm -rf "$INSTALL_DIR"
+fi
+
+git clone https://github.com/openclaw/openclaw.git "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# Клонируем репозиторий
-git clone https://github.com/openclaw/openclaw.git .
-
 info "  Репозиторий склонирован в $INSTALL_DIR"
-echo ""
 
 # ── 5. Настройка .env файла ───────────────────────────────────────────────
 
-info "5/5 — Создаю конфигурацию..."
+info "5/6 — Создаю конфигурацию..."
 
 # Генерируем случайный токен для Gateway
 GATEWAY_TOKEN=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
 
 cat > "$INSTALL_DIR/.env" << ENVEOF
-# ===== OpenClaw Configuration =====
+# ===== OpenClaw Configuration (OVHcloud VPS) =====
+
 # Сгенерированный токен для Gateway API
 OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
 
-# === API КЛЮЧИ — ЗАПОЛНИТЕ СВОИ ===
-# Раскомментируйте нужный провайдер:
+# === API КЛЮЧИ — ЗАПОЛНИТЕ СВОЙ ===
+# Раскомментируйте нужный провайдер и вставьте ключ:
 #ANTHROPIC_API_KEY=sk-ant-xxx
 #OPENAI_API_KEY=sk-xxx
 #GOOGLE_API_KEY=xxx
 
 # === Безопасность ===
-# Привязка порта только к localhost (не открывать наружу!)
+# Привязка порта только к localhost (доступ через SSH-туннель)
 OPENCLAW_HOST=127.0.0.1
 OPENCLAW_PORT=18789
 
@@ -165,33 +200,53 @@ OPENCLAW_PORT=18789
 #OPENCLAW_HOME_VOLUME=openclaw_home
 ENVEOF
 
-info "  .env файл создан в $INSTALL_DIR/.env"
-echo ""
+# Защищаем .env
+chmod 600 "$INSTALL_DIR/.env"
 
-echo "============================================"
-echo -e " ${GREEN}УСТАНОВКА ЗАВЕРШЕНА!${NC}"
-echo "============================================"
-echo ""
-echo "СЛЕДУЮЩИЕ ШАГИ:"
-echo ""
-echo "  1. Отредактируйте .env файл и добавьте свой API-ключ:"
-echo "     nano $INSTALL_DIR/.env"
-echo ""
-echo "  2. Запустите Docker setup:"
-echo "     cd $INSTALL_DIR"
-echo "     chmod +x docker-setup.sh"
-echo "     ./docker-setup.sh"
-echo ""
-echo "  3. Или запустите через docker compose:"
-echo "     cd $INSTALL_DIR"
-echo "     docker compose up -d"
-echo ""
-echo "  4. Проверьте что всё работает:"
-echo "     docker compose logs -f"
+info "  .env создан и защищён (chmod 600)."
+
+# ── 6. Запуск Docker setup ────────────────────────────────────────────────
+
+info "6/6 — Запускаю Docker setup..."
+
+cd "$INSTALL_DIR"
+if [ -f "docker-setup.sh" ]; then
+    chmod +x docker-setup.sh
+    info "  docker-setup.sh готов к запуску."
+    echo ""
+    echo "============================================"
+    echo -e " ${GREEN}УСТАНОВКА ЗАВЕРШЕНА!${NC}"
+    echo "============================================"
+    echo ""
+    echo "СЛЕДУЮЩИЕ ШАГИ (выполните вручную):"
+    echo ""
+    echo "  1. Добавьте API-ключ в .env:"
+    echo "     nano $INSTALL_DIR/.env"
+    echo ""
+    echo "  2. Запустите OpenClaw:"
+    echo "     cd $INSTALL_DIR && ./docker-setup.sh"
+    echo ""
+    echo "  3. Проверьте логи:"
+    echo "     docker compose logs -f"
+    echo ""
+    echo "  4. Подключитесь с Windows через SSH-туннель:"
+    echo "     ssh -L 18789:127.0.0.1:18789 ubuntu@vps-83602260"
+    echo "     Затем откройте: http://localhost:18789"
+    echo ""
+    echo "  5. Или установите Gateway:"
+    echo "     openclaw gateway install"
+    echo "     openclaw doctor --generate-gateway-token"
+    echo ""
+else
+    warn "  docker-setup.sh не найден в репозитории."
+    echo ""
+    echo "  Запустите вручную:"
+    echo "     cd $INSTALL_DIR && docker compose up -d"
+fi
+
 echo ""
 echo "  Gateway токен: ${GATEWAY_TOKEN}"
-echo "  (сохраните его — он нужен для подключения клиентов)"
+echo "  (СОХРАНИТЕ — нужен для подключения клиентов)"
 echo ""
-echo "  ВАЖНО: Порт 18789 привязан к localhost."
-echo "  Для внешнего доступа используйте reverse proxy (nginx/caddy)."
+echo "  IP вашего VPS: $(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
 echo ""
