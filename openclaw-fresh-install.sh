@@ -185,10 +185,21 @@ cat > "$INSTALL_DIR/.env" << ENVEOF
 OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
 
 # === API КЛЮЧИ — ЗАПОЛНИТЕ СВОЙ ===
-# Раскомментируйте нужный провайдер и вставьте ключ:
+# OpenRouter — единая точка доступа ко всем моделям
+OPENROUTER_API_KEY=sk-or-v1-xxx
+
+# Прямые ключи провайдеров (опционально, если без OpenRouter):
 #ANTHROPIC_API_KEY=sk-ant-xxx
 #OPENAI_API_KEY=sk-xxx
 #GOOGLE_API_KEY=xxx
+
+# === МОДЕЛЬ — ЖЁСТКО ЗАФИКСИРОВАНА ===
+# НЕ используем openrouter/auto — он гоняет дорогие модели без контроля.
+# Gemini 3 Flash Preview: быстрый, дешёвый (~\$0.15/1M input), качественный для кода.
+OPENCLAW_DEFAULT_MODEL=openrouter/google/gemini-3-flash-preview
+
+# Fallback модели (если основная недоступна):
+OPENCLAW_FALLBACK_MODELS=openrouter/openai/gpt-5-mini,openrouter/deepseek/deepseek-r1,openrouter/x-ai/grok-3-mini
 
 # === Безопасность ===
 # Привязка порта только к localhost (доступ через SSH-туннель)
