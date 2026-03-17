@@ -184,8 +184,9 @@ cat > "$INSTALL_DIR/.env" << ENVEOF
 # Сгенерированный токен для Gateway API
 OPENCLAW_GATEWAY_TOKEN=${GATEWAY_TOKEN}
 
-# === API КЛЮЧИ — ЗАПОЛНИТЕ СВОЙ ===
+# === API КЛЮЧИ — ЗАПОЛНИТЕ СВОЙ (иначе будет ошибка 500!) ===
 # OpenRouter — единая точка доступа ко всем моделям
+# ВАЖНО: замените sk-or-v1-xxx на реальный ключ с https://openrouter.ai/keys
 OPENROUTER_API_KEY=sk-or-v1-xxx
 
 # Прямые ключи провайдеров (опционально, если без OpenRouter):
@@ -248,6 +249,9 @@ if [ -f "docker-setup.sh" ]; then
     echo "     openclaw gateway install"
     echo "     openclaw doctor --generate-gateway-token"
     echo ""
+    echo -e "  ${YELLOW}6. Если получаете 'API Error: 500' — запустите диагностику:${NC}"
+    echo "     ./openclaw-doctor.sh $INSTALL_DIR/.env"
+    echo ""
 else
     warn "  docker-setup.sh не найден в репозитории."
     echo ""
@@ -260,4 +264,16 @@ echo "  Gateway токен: ${GATEWAY_TOKEN}"
 echo "  (СОХРАНИТЕ — нужен для подключения клиентов)"
 echo ""
 echo "  IP вашего VPS: $(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
+echo ""
+
+# Предупреждение: API-ключ не настроен
+echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${RED}║  ВНИМАНИЕ: API-ключ ещё НЕ настроен!                   ║${NC}"
+echo -e "${RED}║  Без реального ключа сервер будет отдавать 500 ошибку.  ║${NC}"
+echo -e "${RED}║                                                          ║${NC}"
+echo -e "${RED}║  Откройте .env и замените sk-or-v1-xxx:                 ║${NC}"
+echo -e "${RED}║    nano $INSTALL_DIR/.env  ║${NC}"
+echo -e "${RED}║                                                          ║${NC}"
+echo -e "${RED}║  Получить ключ: https://openrouter.ai/keys              ║${NC}"
+echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
